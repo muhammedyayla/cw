@@ -24,4 +24,6 @@ Bu proje, CharacterWorks için React tabanlı bir arayüz sunar.
 
 ## Notlar
 
-- Grid verisi `POST /` ile alınır. Eğer CharacterWorks sunucunuz farklı bir adres kullanıyorsa `NEXT_PUBLIC_CW_BASE_URL` ortam değişkenini ayarlayabilirsiniz.
+- Grid verisi `POST /` ile alınır.
+- Eğer CharacterWorks sunucunuz farklı bir adres kullanıyorsa, `NEXT_PUBLIC_CW_BASE_URL` ortam değişkenini ayarlayabilirsiniz.
+- Alternatif olarak `/grid` sayfasında "CW Sunucu Adresi" alanına IP ve portu girin (örneğin `http://127.0.0.1:8080`) ve "Adresi Kaydet" düğmesine basın.

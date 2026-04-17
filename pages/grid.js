@@ -4,22 +4,6 @@ import styles from '../styles/Grid.module.css';
 
 const API_BASE = process.env.NEXT_PUBLIC_CW_BASE_URL || '';
 
-const cwPost = async (payload) => {
-  const response = await fetch(`${API_BASE}/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json;charset=utf-8'
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    throw new Error(`CW isteği başarısız oldu: ${response.status}`);
-  }
-
-  return response.json();
-};
-
 const createEmptyBoard = (width, height) => {
   return Array.from({ length: height }, () => Array.from({ length: width }, () => null));
 };
@@ -31,8 +15,53 @@ export default function GridPage() {
   const [cellSize, setCellSize] = useState(120);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [configured, setConfigured] = useState(Boolean(API_BASE));
 
   const selectedGridName = useMemo(() => gridNames[selectedGridIndex] || '', [gridNames, selectedGridIndex]);
+
+  const getApiBase = () => {
+    const url = (baseUrl || API_BASE || '').trim().replace(/\/+$/, '');
+    return url;
+  };
+
+  const cwPost = async (payload) => {
+    const apiBase = getApiBase();
+    if (!apiBase) {
+      throw new Error('CW sunucu adresi ayarlı değil. Lütfen IP ve portu girin.');
+    }
+
+    // /api/cw proxy üzerinden gönder → CORS sorunu ortadan kalkar
+    const response = await fetch('/api/cw', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json;charset=utf-8',
+        'X-CW-Target': apiBase  // proxy hangi adrese ileteceğini bu başlıktan öğrenir
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const responseText = await response.text();
+    if (!response.ok) {
+      let detail = responseText;
+      try { detail = JSON.parse(responseText)?.error || responseText; } catch {}
+      throw new Error(detail || `CW isteği başarısız oldu: ${response.status}`);
+    }
+
+    try {
+      return JSON.parse(responseText);
+    } catch (parseError) {
+      throw new Error('Geçersiz JSON yanıtı alındı. Bu muhtemelen yanlış IP/port veya farklı bir sunucuya istek gönderildi.');
+    }
+  };
+
+  const saveBaseUrl = () => {
+    const normalizedUrl = baseUrl.trim().replace(/\/+$/, '');
+    localStorage.setItem('cwBaseUrl', normalizedUrl);
+    setBaseUrl(normalizedUrl);
+    setConfigured(Boolean(normalizedUrl || API_BASE));
+    setError(null);
+  };
 
   const loadGridNames = async () => {
     setLoading(true);
@@ -104,8 +133,18 @@ export default function GridPage() {
   };
 
   useEffect(() => {
-    loadGridNames();
+    if (typeof window !== 'undefined') {
+      const savedUrl = localStorage.getItem('cwBaseUrl') || '';
+      setBaseUrl(savedUrl);
+      setConfigured(Boolean(savedUrl || API_BASE));
+    }
   }, []);
+
+  useEffect(() => {
+    if (configured) {
+      loadGridNames();
+    }
+  }, [configured]);
 
   useEffect(() => {
     if (selectedGridName) {
@@ -123,6 +162,25 @@ export default function GridPage() {
         <section className={styles.toolbar}>
           <h1>CharacterWorks Grid</h1>
           {error && <div className={styles.error}>{error}</div>}
+          <div className={styles.config}>
+            <label>
+              CW Sunucu Adresi:
+              <input
+                type="text"
+                value={baseUrl}
+                placeholder="http://127.0.0.1:8080"
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </label>
+            <button type="button" onClick={saveBaseUrl}>
+              Adresi Kaydet
+            </button>
+          </div>
+          {!configured && (
+            <div className={styles.notice}>
+              CW sunucu IP adresi veya portu ayarlı değil. Lütfen bir adres girin ve kaydedin.
+            </div>
+          )}
           <div className={styles.controls}>
             <label>
               Grid seç:
@@ -147,7 +205,7 @@ export default function GridPage() {
                 onChange={(event) => setCellSize(Number(event.target.value))}
               />
             </label>
-            <button type="button" onClick={() => loadGridCells(selectedGridName)} disabled={loading}>
+            <button type="button" onClick={() => loadGridCells(selectedGridName)} disabled={loading || !configured}>
               Yenile
             </button>
           </div>
