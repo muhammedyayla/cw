@@ -1,0 +1,375 @@
+/* --- Reset & Base Styles --- */
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    display: flex;
+    flex-direction: column; /* Arrange items vertically */
+    height: 100vh;          /* Full fit to browser height */
+    background-color: #323232;
+    background-image: url("/images/cw_logo.png");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    font-family: "Tahoma", Geneva, sans-serif;
+    color: #eee;
+}
+
+/* --- Main Layout (Flexbox) --- */
+h2 {
+    margin-top: 20px;
+    margin-bottom: 5px;
+    color: #bfc6bf;
+    flex-shrink: 0; /* Do not shrink header */
+}
+
+#main-container {
+    display: flex;
+    flex: 1; /* Take all remaining height */
+    min-height: 0; /* Prevent nested Flexbox overflow */
+    overflow: hidden;
+    margin-top: 10px;
+}
+
+#right-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1; /* Fill remaining width */
+    overflow: hidden;
+    min-width: 0; /* Prevent Flex overflow */
+}
+
+/* Left Panel */
+#left-panel {
+    width: 200px;
+    flex-shrink: 0; /* Panel cannot be shrunk */
+    overflow-y: auto;
+    background-color: #383838;
+    padding: 10px;
+    box-sizing: border-box;
+}
+
+#select_box {
+    width: 100%;
+    display: inline-block;
+    vertical-align: top;
+}
+
+select {
+    padding: 10px;
+    font-size: 16px;
+    width: 100% !important;
+    height: 40px;
+    border-radius: 4px;
+    box-shadow: 0 3px 0 #ccc, 0 -1px #fff inset;
+    background: #f8f8f8;
+    color: #888;
+    border: none;
+    outline: none;
+    display: inline-block;
+    cursor: pointer;
+    margin: 12px 12px 12px 0;
+}
+
+#motion-list {
+    width: 100%;
+    list-style: none;
+    padding: 0;
+}
+
+#motion-list li {
+    color: #bfc6bf;
+    padding: 5px;
+    margin-bottom: 2px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+#motion-list li:hover { color: #ffffff; background-color: #4a4948; }
+#motion-list li.selected-motion { color: #ffffff; background-color: #4a4948; }
+
+#panel-resizer {
+    width: 6px;
+    cursor: col-resize;
+    background-color: #555;
+    flex-shrink: 0;
+}
+
+/* Upper fixed elements (Buttons, Spacer, LayerTable) */
+#grid_view, #grid-spacer, #layerTable {
+    flex-shrink: 0;
+}
+#grid-spacer { height: 20px; width: 100%; }
+
+/* --- Buttons & Controls --- */
+.button {
+    background: linear-gradient(to bottom, #575554, #4a4948);
+    color: #bfc6bf;
+    position: relative;
+    display: table-cell;
+    vertical-align: middle;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid #c6c5c4;
+    width: 120px;
+    height: 120px;
+    cursor: pointer;
+    margin: 2px;
+    text-align: center;
+    white-space: pre-wrap;
+    font-family: "Tahoma", Geneva, sans-serif;
+    box-shadow: inset 0px 15px green;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+}
+.button:hover { background: linear-gradient(#5b5957, #4b4948); color: #ffffff; }
+.button:active { background: linear-gradient(#1f1f1f, #343434); color: #ffffff; }
+
+/* Button Shine Effect */
+.button:after {
+    content: ""; position: absolute; top: -110%; left: -210%;
+    width: 200%; height: 200%; opacity: 0; transform: rotate(30deg);
+    background: rgba(255, 255, 255, 0.13);
+    background: linear-gradient(to right, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.13) 77%, rgba(255,255,255,0.5) 92%, rgba(255,255,255,0.0) 100%);
+}
+.button:hover:after { opacity: 1; top: -30%; left: -30%; transition: left 0.7s, top 0.7s, opacity 0.15s; }
+.button:active:after { opacity: 0; }
+
+.save-button {
+    background-color: #6c757d; border: none; color: white;
+    padding: 10px 20px; text-align: center; text-decoration: none;
+    display: inline-block; font-size: 16px; margin: 4px 2px;
+    cursor: pointer; transition-duration: 0.4s;
+}
+.save-button:hover { background-color: #5a6268; color: white; border: 2px solid #6c757d; }
+
+/* Channel Options (Duplicate styles merged) */
+#channelOptions {
+    display: inline-flex; /* Align with Flex */
+    align-items: center;
+    margin-left: 20px; margin-top: 5px; padding: 10px;
+    background: linear-gradient(to bottom, #575554, #4a4948);
+    border: 1px solid #c6c5c4; border-radius: 4px;
+    width: 270px; box-sizing: border-box; height: auto; /* Auto instead of fixed height */
+    flex-shrink: 0;
+}
+#channelOptions label { margin-right: 10px; color: #bfc6bf; font-weight: bold; white-space: nowrap; cursor: pointer; }
+#channelOptions label:hover { color: #ffffff; }
+#channelOptions input[type="radio"] { margin-right: 8px; cursor: pointer; }
+
+/* --- Inputs --- */
+input { cursor: pointer; margin: 0; }
+input[type="text"] { width: calc(100% - 10px); padding: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 0; }
+input[type="file"] {
+    background: linear-gradient(to bottom, #575554, #4a4948);
+    color: #bfc6bf; padding: 5px 10px; border-radius: 4px;
+    border: 1px solid #c6c5c4; font-family: "Tahoma", Geneva, sans-serif; font-size: 12px;
+}
+input[type="file"]:hover { background: linear-gradient(#5b5957, #4b4948); color: #ffffff; }
+
+#csvFileInput { position: relative; display: inline-block; width: 100%; max-width: 600px; }
+#csvFileInput::before {
+    content: 'Select CSV/XML File';
+    background: linear-gradient(to bottom, #575554, #4a4948);
+    border: 1px solid #c6c5c4; border-radius: 4px; padding: 5px 10px;
+    color: #bfc6bf; cursor: pointer;
+}
+#csvFileInput::-webkit-file-upload-button { visibility: hidden; }
+
+/* --- #ustbolge and Container Height Settings (Critical) --- */
+#ustbolge {
+    max-width: 100%;
+    flex: 0 1 auto !important; /* Occupy space based on content */
+    height: auto !important;
+    max-height: calc(100vh - 250px) !important; /* But do not exceed limits */
+    
+    overflow-y: auto; /* Scroll when limit is exceeded */
+    border: 1px solid #575554;
+    padding: 10px;
+    background: linear-gradient(to bottom, #4a4948, #323232);
+    border-radius: 4px;
+    box-shadow: 0 3px 0 #222, 0 -1px #666 inset;
+    margin: 20px 0 60px 0; /* Top 20, Bottom 60 (Footer space) */
+    z-index: 10;
+
+    /* Flex structure for inner container alignment */
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+}
+
+#ustbolge .container {
+    flex: 1 !important; /* Fill remaining space */
+    overflow: auto; /* Scroll if content overflows */
+    width: 100%;
+    min-height: 0 !important;
+    position: relative;
+    margin: 0;
+    background: #808080;
+    border: 1px solid #575554;
+    border-radius: 4px;
+    box-shadow: 0 3px 0 #222, 0 -1px #666 inset;
+}
+
+/* --- Scrollbars --- */
+.container::-webkit-scrollbar, #ustbolge::-webkit-scrollbar { width: 8px; height: 8px; }
+.container::-webkit-scrollbar-track, #ustbolge::-webkit-scrollbar-track { background: #323232; border-radius: 4px; }
+.container::-webkit-scrollbar-thumb, #ustbolge::-webkit-scrollbar-thumb { background: #575554; border-radius: 4px; }
+.container::-webkit-scrollbar-thumb:hover, #ustbolge::-webkit-scrollbar-thumb:hover { background: #666; }
+.container::-webkit-scrollbar-corner { background: #323232; }
+
+/* --- CSV Table (Duplicates merged) --- */
+#csvTable {
+    width: 100%; min-width: 100%; /* For wide tables */
+    table-layout: fixed;
+    border-collapse: separate; border-spacing: 0;
+    color: #bfc6bf; font-size: 12px; margin-top: 0;
+}
+
+#csvTable:head {
+    position: sticky;
+    top: -3px; /* 3 pixels up (negative value) */
+    z-index: 1;
+    background: linear-gradient(to bottom, #575554, #4a4948);
+}
+
+#csvTable th {
+    padding: 8px;
+    border: 1px solid #575554;
+    background: linear-gradient(to bottom, #6a6968, #5a5958);
+    color: white;
+    font-weight: bold;
+    text-align: left;
+    min-width: 150px;
+    max-width: 300px;
+    box-sizing: border-box;
+}
+
+#csvTable td {
+    padding: 8px; /* Organized */
+    border: 1px solid #666;
+    background: linear-gradient(to bottom, #575554, #4a4948);
+    color: #ffffff;
+    cursor: pointer;
+    position: relative;
+}
+#csvTable tr:nth-child(even) td { background-color: #4a4948; }
+#csvTable tr:hover td { background: linear-gradient(#5b5957, #4b4948); color: #ffffff; }
+#csvTable td.selected { background-color: #4a4948 !important; outline: 2px solid #4CAF50; outline-offset: -2px; }
+
+/* CSV Table Inputs */
+#csvTable td input {
+    width: 100%; height: 100%; border: none;
+    background: linear-gradient(to bottom, #575554, #4a4948);
+    outline: none; color: white; font: inherit;
+    text-align: left; padding: 8px; box-sizing: border-box; direction: ltr;
+}
+#csvTable td input:focus { background: linear-gradient(to bottom, #676665, #575554); }
+
+/* --- Generic Tables (LayerTable etc.) --- */
+table {
+    width: 100%; border-collapse: collapse; margin-top: 0px;
+    background-color: #f2f2f2; color: #333;
+}
+th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+th { background-color: #e0e0e0; font-weight: bold; }
+tr:nth-child(even) { background-color: #f7f7f7; }
+tr:hover { background-color: #d9d9d9; }
+
+#layerTable {
+    margin-bottom: 20px; flex-shrink: 0;
+    /* display: none; Can be added via HTML style if needed */
+}
+#layerTable th:first-child, #layerTable td:first-child {
+    min-width: 300px; width: 300px; max-width: 300px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* --- Footer & Extras --- */
+#footer {
+    position: fixed;
+    bottom: 0;
+    left: 200px; /* Skip left panel width, center within right panel start */
+    right: 0;
+    color: #ffffff;
+    text-align: center;
+    padding: 10px 0;
+    font-size: 14px;
+    z-index: 999;
+}
+
+.selected { background: linear-gradient(#1f1f1f, #343434) !important; color: #ffffff !important; box-shadow: inset 0 0 5px rgba(0,0,0,0.5); }
+
+.editable { cursor: pointer; }
+.editing { padding: 0 !important; }
+.editing input { width: 100%; height: 100%; padding: 8px; box-sizing: border-box; border: none; background: #4a4948; color: #ffffff; outline: 2px solid #bfc6bf; font-family: "Tahoma", Geneva, sans-serif; font-size: 12px; }
+
+/* Column Resizer */
+.column-resizer {
+    position: absolute; top: 0; right: -3px; bottom: 0; width: 6px;
+    cursor: col-resize; z-index: 10; background-color: transparent;
+    transition: background-color 0.2s;
+}
+.column-resizer:hover { background-color: rgba(255, 255, 255, 0.2); }
+
+/* Body States */
+body.resizing-panel { cursor: col-resize !important; user-select: none; }
+body.resizing-column { user-select: none; cursor: col-resize !important; }
+
+/* Error Message */
+.error-message {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background-color: #ff4444; color: white; padding: 15px 30px;
+    border-radius: 4px; z-index: 1000; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    animation: slideIn 0.5s ease; width: fit-content;
+}
+@keyframes slideIn { from { top: -100px; opacity: 0; } to { top: 20px; opacity: 1; } }
+
+/* --- Custom Checkbox Styles (UPDATED) --- */
+#csvTable th .column-toggle {
+    /* Hide default browser box */
+    appearance: none;
+    -webkit-appearance: none;
+    
+    /* Same background gradient as Header */
+    background: linear-gradient(to bottom, #575554, #4a4948);
+    
+    /* Border (For visibility) */
+    border: 1px solid #bfc6bf; 
+    color: #ffffff;
+    
+    /* Dimensions */
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    vertical-align: middle;
+    position: relative;
+    outline: none;
+}
+
+/* Highlight border when checked */
+#csvTable th .column-toggle:checked {
+    border: 1px solid #fff;
+}
+
+/* Checkmark (Drawn with CSS) */
+#csvTable th .column-toggle:checked::before {
+    content: '';
+    position: absolute;
+    display: block;
+    left: 4px;
+    top: 1px;
+    width: 3px;
+    height: 7px;
+    border: solid #ffffff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+/* Color Leak Fix */
+#csvTable input[type="text"] { background: #4a4948 !important; }

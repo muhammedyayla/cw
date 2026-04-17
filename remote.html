@@ -1,0 +1,1867 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>CharacterWorks Remote Text Controller</title>
+   <link rel="stylesheet" href="css/style_rm.css" />
+   <link rel="shortcut icon" href="images/cw.png" type="image/png" />
+</head>
+
+<script src="js/jquery-3.2.1.min.js"></script>
+
+
+<script>
+    
+const xmlOperations = {
+    // Saves the current state of layers and text layers to an XML file.
+    saveToXML(layers, selectedMotion) {
+        const xmlDoc = document.implementation.createDocument(null, "layers");
+        
+        layers.forEach(layer => {
+            const layerElement = xmlDoc.createElement("layer");
+            const nameElement = xmlDoc.createElement("name");
+            nameElement.textContent = layer.name;
+            layerElement.appendChild(nameElement);
+            
+            const textLayersElement = xmlDoc.createElement("textLayers");
+            layer.textLayers.forEach(textLayer => {
+                const textLayerElement = xmlDoc.createElement("textLayer");
+                ["name", "path", "value"].forEach(prop => {
+                    const element = xmlDoc.createElement(prop);
+                    element.textContent = textLayer[prop] || "";
+                    textLayerElement.appendChild(element);
+                });
+                textLayersElement.appendChild(textLayerElement);
+            });
+            layerElement.appendChild(textLayersElement);
+            xmlDoc.documentElement.appendChild(layerElement);
+        });
+
+        const serializer = new XMLSerializer();
+        const xmlString = '<?xml version="1.0" encoding="UTF-8"?>\n' + 
+                        serializer.serializeToString(xmlDoc);
+
+        const blob = new Blob([xmlString], { type: 'application/xml' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${selectedMotion}.xml`;
+        link.click();
+    },
+
+    // Loads layer data from a selected XML file, parses it, and validates against available motions.
+    loadFromXML(file) {
+        return new Promise((resolve, reject) => {
+            if (!file?.name.toLowerCase().endsWith('.xml')) {
+                reject(new Error("Please select an XML file"));
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(e.target.result, "application/xml");
+                    
+                    if (xmlDoc.getElementsByTagName("parsererror").length) {
+                        throw new Error("Invalid XML format");
+                    }
+
+                    // FIX: Use 'motion-list' ul element instead of 'drop'
+                    const motionList = document.getElementById('motion-list');
+                    const availableMotions = Array.from(motionList.querySelectorAll('li[data-motion]')).map(li => li.dataset.motion);
+                    
+                    const layers = Array.from(xmlDoc.getElementsByTagName("layer"));
+                    if (!layers.length) throw new Error("No layers found in XML file");
+
+                    const parsedLayers = layers
+                        .map(layer => {
+                            const name = layer.querySelector("name")?.textContent;
+                            // Only process if motion exists in motion list
+                            if (name && availableMotions.includes(name)) {
+                                return {
+                                    name: name,
+                                    textLayers: Array.from(layer.getElementsByTagName("textLayer"))
+                                        .map(textLayer => ({
+                                            name: textLayer.querySelector("name")?.textContent,
+                                            path: textLayer.querySelector("path")?.textContent,
+                                            value: textLayer.querySelector("value")?.textContent || ""
+                                        }))
+                                        .filter(tl => tl.name && tl.path)
+                                };
+                            }
+                            return null;
+                        })
+                        .filter(layer => layer !== null); // Remove null entries
+
+                    if (parsedLayers.length === 0) {
+                        throw new Error("No matching motions found in XML file");
+                    }
+
+                    resolve(parsedLayers);
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = () => reject(new Error("Error reading file"));
+            reader.readAsText(file);
+        });
+    }};
+
+</script>
+
+<script>
+const ErrorHandler = {
+    // Defines standard error types for classification.
+    errorTypes: {
+        FILE_ERROR: 'FILE_ERROR',
+        CSV_ERROR: 'CSV_ERROR',
+        XML_ERROR: 'XML_ERROR',
+        STATE_ERROR: 'STATE_ERROR',
+        NETWORK_ERROR: 'NETWORK_ERROR'
+    },
+
+    // Defines user-friendly error messages.
+    messages: {
+        FILE_NOT_FOUND: 'File not found or invalid file',
+        INVALID_CSV: 'Invalid CSV format',
+        INVALID_XML: 'Invalid XML format',
+        NETWORK_FAILED: 'Network request failed',
+        STATE_INVALID: 'Invalid state operation',
+        UNKNOWN_ERROR: 'An unknown error occurred'
+    },
+
+    // Main method to handle and log errors, and display a user message.
+    handleError(error, type, customMessage) {
+        console.error(`[${type}]`, error);
+
+        // Determine user message based on error type
+        let userMessage = customMessage || this.getUserMessage(type, error);
+        
+        // Show error in UI
+        this.showErrorToUser(userMessage);
+
+        // Log error
+        this.logError(type, error, userMessage);
+    },
+
+    // Determines the appropriate user message based on the error type.
+    getUserMessage(type, error) {
+        switch(type) {
+            case this.errorTypes.FILE_ERROR:
+                return this.messages.FILE_NOT_FOUND;
+            case this.errorTypes.CSV_ERROR:
+                return this.messages.INVALID_CSV;
+            case this.errorTypes.XML_ERROR:
+                return this.messages.INVALID_XML;
+            case this.errorTypes.NETWORK_ERROR:
+                return this.messages.NETWORK_FAILED;
+            case this.errorTypes.STATE_ERROR:
+                return this.messages.STATE_INVALID;
+            default:
+                return this.messages.UNKNOWN_ERROR;
+        }
+    },
+
+    // Displays an error message banner to the user in the UI.
+    showErrorToUser(message) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-message';
+        errorDiv.textContent = message;
+        
+        const existingError = document.querySelector('.error-message');
+        if (existingError) {
+            existingError.remove();
+        }
+
+        document.body.insertBefore(errorDiv, document.body.firstChild);
+
+        setTimeout(() => errorDiv.remove(), 5000);
+    },
+
+    // Logs detailed error information to the console.
+    logError(type, error, userMessage) {
+        const errorLog = {
+            timestamp: new Date().toISOString(),
+            type,
+            message: error.message || error,
+            userMessage,
+            stack: error.stack
+        };
+        console.log('Error Log:', errorLog);
+    }
+};
+</script>
+
+<script>
+// COLUMN HIDER MANAGER
+const ColumnHider = {
+    // Stores the visibility state of columns (index -> true/false).
+    visibilityState: new Map(), 
+    
+    // ID of the dynamically created style tag.
+    styleTagId: 'column-hiding-style',
+
+    // Initialized when a new table is loaded and adds event listeners.
+    init(tableContainer) {
+        this.visibilityState.clear();
+        this.attachToggleEvents(tableContainer);
+    },
+
+    // Adds event listeners to all checkboxes.
+    attachToggleEvents(tableContainer) {
+        const checkboxes = tableContainer.querySelectorAll('.column-toggle');
+        
+        checkboxes.forEach(checkbox => {
+            const colIndex = checkbox.getAttribute('data-col-index');
+            this.visibilityState.set(colIndex, checkbox.checked);
+
+            checkbox.addEventListener('change', (e) => {
+                this.toggleColumnVisibility(colIndex, e.target.checked);
+            });
+        });
+
+        this.updateStyleRules();
+    },
+
+    // Changes column visibility and updates style rules.
+    toggleColumnVisibility(colIndex, isVisible) {
+        this.visibilityState.set(colIndex, isVisible);
+        this.updateStyleRules();
+        
+        if (!isVisible) {
+             const selectedCell = document.querySelector(`#csvTable td.selected[data-col-index="${colIndex}"]`);
+             if (selectedCell) {
+                 EventManager.clearSelection(); 
+             }
+        }
+    },
+
+    // Creates and applies dynamic CSS rules based on the current visibility state.
+    updateStyleRules() {
+        let cssRules = '';
+        
+        const existingStyle = document.getElementById(this.styleTagId);
+        if (existingStyle) {
+            existingStyle.remove();
+        }
+
+        this.visibilityState.forEach((isVisible, index) => {
+            if (index !== null && !isVisible) {
+                cssRules += `
+                    #csvTable [data-col-index="${index}"] {
+                        display: none !important;
+                    }
+                `;
+            }
+        });
+
+        let style = document.createElement('style');
+        style.id = this.styleTagId;
+        style.textContent = cssRules;
+        document.head.appendChild(style);
+    }
+};
+
+
+// COLUMN RESIZER MANAGER
+const ColumnResizer = {
+    isDragging: false,
+    startX: 0,
+    startWidth: 0,
+    currentTh: null,
+    
+    // Initialized when a new table is loaded and adds event listeners.
+    init(tableContainer) {
+        // Bind event handlers to the object
+        this.doResize = this.doResize.bind(this);
+        this.stopResize = this.stopResize.bind(this);
+        
+        const resizers = tableContainer.querySelectorAll('.column-resizer');
+        resizers.forEach(resizer => {
+            resizer.addEventListener('mousedown', this.startResize.bind(this));
+        });
+    },
+
+    startResize(e) {
+        // Only allow dragging with the left mouse button
+        if (e.button !== 0) return; 
+
+        e.preventDefault();
+        
+        this.currentTh = e.target.closest('th');
+        if (!this.currentTh) return;
+
+        this.isDragging = true;
+        this.startX = e.clientX;
+        // Get the current width of the dragged column
+        this.startWidth = this.currentTh.offsetWidth; 
+
+        document.body.classList.add('resizing-column'); 
+
+        // Add global event listeners
+        document.addEventListener('mousemove', this.doResize);
+        document.addEventListener('mouseup', this.stopResize);
+    },
+
+    doResize(e) {
+        if (!this.isDragging) return;
+
+        // Difference on the X axis
+        const diff = e.clientX - this.startX; 
+        const newWidth = this.startWidth + diff;
+        
+        const MIN_WIDTH = 50; 
+
+        if (newWidth >= MIN_WIDTH) {
+            // Use CSS variables or direct styling to set the column width
+            this.currentTh.style.width = newWidth + 'px';
+            this.currentTh.style.minWidth = newWidth + 'px';
+            this.currentTh.style.maxWidth = newWidth + 'px';
+        }
+    },
+
+    stopResize() {
+        if (!this.isDragging) return;
+
+        this.isDragging = false;
+        this.currentTh = null;
+        
+        document.body.classList.remove('resizing-column'); 
+        
+        // Remove global event listeners
+        document.removeEventListener('mousemove', this.doResize);
+        document.removeEventListener('mouseup', this.stopResize);
+    }
+};
+
+// LEFT PANEL RESIZER MANAGER
+const PanelResizer = {
+    isDragging: false,
+    startX: 0,
+    startWidth: 0,
+    leftPanel: null, 
+    resizer: null,
+
+    init() {
+        this.leftPanel = document.getElementById('left-panel');
+        this.resizer = document.getElementById('panel-resizer');
+
+        if (!this.resizer || !this.leftPanel) return;
+
+        // Bind event handlers to the object
+        this.doResize = this.doResize.bind(this);
+        this.stopResize = this.stopResize.bind(this);
+
+        this.resizer.addEventListener('mousedown', this.startResize.bind(this));
+    },
+
+    startResize(e) {
+        e.preventDefault(); 
+        
+        this.isDragging = true;
+        this.startX = e.clientX;
+        // Get the current width of the left panel
+        this.startWidth = this.leftPanel.offsetWidth; 
+
+        document.body.classList.add('resizing-panel'); 
+
+        // Add global event listeners
+        document.addEventListener('mousemove', this.doResize);
+        document.addEventListener('mouseup', this.stopResize);
+    },
+
+    doResize(e) {
+        if (!this.isDragging) return;
+
+        // Difference on the X axis
+        const diff = e.clientX - this.startX; 
+        const newWidth = this.startWidth + diff;
+        
+        // Min and max width limits
+        const MIN_WIDTH = 50; 
+        const MAX_WIDTH = 500; 
+
+        if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) {
+            // Set the width of the left panel
+            this.leftPanel.style.width = newWidth + 'px';
+            // Save the new width value (as a reference for continuous dragging)
+            this.leftPanel.style.minWidth = newWidth + 'px'; 
+        }
+    },
+
+    stopResize() {
+        if (!this.isDragging) return;
+
+        this.isDragging = false;
+        
+        document.body.classList.remove('resizing-panel'); 
+        
+        // Remove global event listeners
+        document.removeEventListener('mousemove', this.doResize);
+        document.removeEventListener('mouseup', this.stopResize);
+    }
+};
+
+
+</script>
+
+<script>
+const StateManager = {
+    state: {
+        previousMotion: null,
+        currentMotion: null,
+        layers: [],
+        selectedChannel: 'live1',
+        selectedCsvValue: null
+    },
+
+    // Sets a specific state variable and triggers a change notification.
+    setState(key, value) {
+        const oldValue = this.state[key];
+        this.state[key] = value;
+        this.notifyStateChange(key, oldValue, value);
+    },
+
+    // Retrieves the value of a specific state variable.
+    getState(key) {
+        return this.state[key];
+    },
+
+    // Updates multiple state variables simultaneously.
+    setMultipleStates(updates) {
+        Object.entries(updates).forEach(([key, value]) => {
+            this.setState(key, value);
+        });
+    },
+
+    // Logs the state change and calls handleStateChange.
+    notifyStateChange(key, oldValue, newValue) {
+        console.log(`State changed: ${key}`, {
+            from: oldValue,
+            to: newValue
+        });
+        // Actions to take on state changes
+        this.handleStateChange(key, newValue);
+    },
+
+    // Executes actions based on which state key has changed.
+    handleStateChange(key, value) {
+        switch(key) {
+            case 'currentMotion':
+                motionController.updateTable(value);
+                break;
+            case 'selectedCsvValue':
+                // Manage CSV selection changes
+                this.handleCsvValueChange(value);
+                break;
+            case 'selectedChannel':
+                // Manage channel changes
+                break;
+        }
+    },
+
+    // Manages updates to the layer table input when the CSV table selection changes.
+    handleCsvValueChange(value) {
+        const selectedCell = document.querySelector('#csvTable td.selected');
+        if (selectedCell && value !== null) {
+            const input = selectedCell.querySelector('input');
+            if (input) {
+                input.value = value;
+            } else {
+                selectedCell.textContent = value;
+            }
+        }
+    }
+};
+</script>
+
+<script>
+const EventManager = {
+    handlers: new Map(),
+
+    // Initializes and registers all event listeners.
+    init() {
+        this.registerTableEvents();
+        this.registerLayerEvents();
+        this.registerKeyboardEvents();
+        this.registerGlobalEvents();
+        this.registerButtonEvents();
+        this.registerDropdownEvents();
+    },
+
+    // Registers click, input, and focus events for the CSV table.
+    registerTableEvents() {
+        const csvTable = DOMCache.get('#csvTable');
+        
+        // Event listeners for input elements
+        csvTable.addEventListener('click', this.handleTableClick.bind(this));
+        csvTable.addEventListener('input', this.handleTableInput.bind(this));
+        csvTable.addEventListener('focusin', this.handleTableFocus.bind(this));
+    },
+
+    // Handles click events on the CSV table to manage cell selection and state updates.
+    handleTableClick(e) {
+       
+        // Click on input element
+        if (e.target.matches('input')) {
+            PerformanceMonitor.start('tableClick');
+            const previousSelected = document.querySelector('#csvTable td.selected');
+            if (previousSelected) {
+                previousSelected.classList.remove('selected');
+            }
+            
+            const td = e.target.closest('td');
+            if (td) {
+                td.classList.add('selected');
+                StateManager.setState('selectedCsvValue', e.target.value);
+            }
+            PerformanceMonitor.end('tableClick');
+        }
+        // Direct click on TD element (outside input)
+        else if (e.target.matches('td')) {
+            PerformanceMonitor.start('tableClick');
+            const previousSelected = document.querySelector('#csvTable td.selected');
+            if (previousSelected) {
+                previousSelected.classList.remove('selected');
+            }
+            
+            e.target.classList.add('selected');
+            const input = e.target.querySelector('input');
+            if (input) {
+                StateManager.setState('selectedCsvValue', input.value);
+                input.focus();
+            } else {
+                StateManager.setState('selectedCsvValue', e.target.textContent);
+            }
+            PerformanceMonitor.end('tableClick');
+        }
+    },
+
+    // Handles input events within the CSV table inputs to update the selected value in the state.
+    handleTableInput(e) {
+        if (e.target.matches('input')) {
+            requestAnimationFrame(() => {
+                StateManager.setState('selectedCsvValue', e.target.value);
+            });
+        }
+    },
+
+    // Handles focus event on CSV table inputs, automatically selecting the text.
+    handleTableFocus(e) {
+        if (e.target.matches('input')) {
+            // Automatically select text when input is focused
+            e.target.select();
+        }
+    },
+
+    // Registers double-click and input events for the layer table to allow data entry and state synchronization.
+    registerLayerEvents() {
+        const layerTable = document.getElementById('layerTable');
+
+        layerTable.addEventListener('dblclick', (e) => {
+            if (!e.target.matches('input[type="text"]')) return;
+            if (!StateManager.getState('selectedCsvValue')) return;
+
+            e.target.value = StateManager.getState('selectedCsvValue');
+            motionController.updateGlobalLayerFromTable(StateManager.getState('currentMotion'));
+        });
+
+        layerTable.addEventListener('input', this.debounce((e) => {
+            if (!e.target.matches('input[type="text"]')) return;
+            
+            motionController.updateGlobalLayerFromTable(StateManager.getState('currentMotion'));
+        }, 300));
+    },
+
+    // Registers global keyboard events, primarily for CSV table navigation (Arrow Keys) and layer table clear (Delete key).
+registerKeyboardEvents() {
+        document.addEventListener('keydown', (e) => {
+            // --- YENİ KONTROL: layerTable odağı ---
+            const activeEl = document.activeElement;
+            const isInLayerTable = activeEl.closest('#layerTable') !== null;
+            
+            // Eğer kullanıcı layerTable içindeki bir input alanına odaklanmışsa, 
+            // yön tuşlarının csvTable'ı yönetmesini engelle.
+            if (isInLayerTable && activeEl.tagName === 'INPUT') {
+                return; 
+            }
+
+            // Arrow keys check
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                
+                const selectedCell = document.querySelector('#csvTable td.selected');
+                
+                // If no selected cell, do nothing
+                if (!selectedCell) return;
+
+                const currentInput = selectedCell.querySelector('input');
+                const isEditing = currentInput && document.activeElement === currentInput;
+
+                // --- CTRL KEY CHECK ---
+                if (e.ctrlKey) {
+                    // Force cell navigation
+                } 
+                // --- IN-TEXT NAVIGATION (WHEN CTRL IS NOT PRESSED) ---
+                else if (isEditing) {
+                    const cursorStart = currentInput.selectionStart;
+                    const cursorEnd = currentInput.selectionEnd;
+                    const textLength = currentInput.value.length;
+
+                    if (e.key === 'ArrowLeft') {
+                        if (cursorStart > 0 || cursorStart !== cursorEnd) {
+                            return; 
+                        }
+                    }
+
+                    if (e.key === 'ArrowRight') {
+                        if (cursorStart < textLength || cursorStart !== cursorEnd) {
+                            return;
+                        }
+                    }
+                }
+
+                // --- CELL NAVIGATION LOGIC (csvTable için) ---
+                const currentRow = selectedCell.parentElement;
+                const selectedColIndex = parseInt(selectedCell.getAttribute('data-col-index'));
+                
+                let targetCell;
+                let targetRow;
+
+                switch(e.key) {
+                    case 'ArrowUp':
+                        targetRow = currentRow.previousElementSibling;
+                        break;
+                    case 'ArrowDown':
+                        targetRow = currentRow.nextElementSibling;
+                        break;
+                    case 'ArrowLeft':
+                    case 'ArrowRight':
+                        const direction = e.key === 'ArrowLeft' ? -1 : 1;
+                        let nextColIndex = selectedColIndex + direction;
+
+                        while (true) {
+                            const nextCell = currentRow.querySelector(`[data-col-index="${nextColIndex}"]`);
+                            if (nextCell) {
+                                targetCell = nextCell;
+                                break;
+                            }
+                            if (nextColIndex < 0 || nextColIndex > 1000) break; 
+                            nextColIndex += direction;
+                        }
+                        break;
+                }
+
+                if (targetRow && targetRow.tagName === 'TR') {
+                    targetCell = targetRow.querySelector(`[data-col-index="${selectedColIndex}"]`);
+                }
+
+                if (targetCell && targetCell.tagName === 'TD') {
+                    selectedCell.classList.remove('selected');
+                    targetCell.classList.add('selected');
+                    
+                    const input = targetCell.querySelector('input');
+                    StateManager.setState('selectedCsvValue', input ? input.value : targetCell.textContent);
+                    
+                    if (input) {
+                        input.focus();
+                        input.select();
+                    }
+                    
+                    targetCell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    
+                    e.preventDefault();
+                }
+            }
+
+            // Delete key logic
+            if (e.key === 'Delete') {
+                if (document.activeElement.tagName === 'INPUT') {
+                    return; 
+                }
+                const inputs = document.querySelectorAll('#layerTable tbody input[type="text"]');
+                inputs.forEach(input => {
+                    input.value = '';
+                });
+                motionController.updateGlobalLayerFromTable(StateManager.getState('currentMotion'));
+            }
+        });
+    },
+            
+    // Registers a global click event to clear selection when clicking outside main areas.
+    registerGlobalEvents() {
+        document.addEventListener('click', (e) => {
+            // Exclude checkbox clicks, header content clicks, or ColumnResizer dragging
+            if (e.target.matches('.column-toggle') || e.target.closest('.header-content')) {
+                return;
+            }
+
+            if (e.target.closest('#csvTable') || 
+                e.target.closest('#layerTable') || 
+                e.target.closest('#grid_view')) {
+                return;
+            }
+
+            if (e.target.closest('#ustbolge')) {
+                this.clearSelection();
+            }
+        });
+    },
+
+    // Registers click events for the main control buttons (Play, Stop, Save, Load, etc.).
+    registerButtonEvents() {
+        const gridView = document.getElementById('grid_view');
+        const loadFileInput = document.querySelector('[data-action="load"] input[type="file"]');
+        
+        gridView.addEventListener('click', async (e) => {
+            const button = e.target.closest('[data-action]');
+            if (!button) return;
+
+            const action = button.dataset.action;
+            
+            try {
+                switch(action) {
+                    case 'play':
+                        await motionController.play();
+                        break;
+                    case 'stop':
+                        await motionController.stop();
+                        break;
+                    case 'finish':
+                        await motionController.finish();
+                        break;
+                    case 'update':
+                        await motionController.update();
+                        break;
+                    case 'save':
+                        await motionController.save();
+                        break;
+                    case 'clear':
+                        await motionController.clear();
+                        break;
+                }
+            } catch (error) {
+                ErrorHandler.handleError(
+                    error,
+                    ErrorHandler.errorTypes.STATE_ERROR,
+                    `Failed to execute ${action} action`
+                );
+            }
+        });
+
+        if (loadFileInput) {
+            loadFileInput.addEventListener('change', async (e) => {
+                try {
+                    await motionController.load(e);
+                    e.target.value = '';
+                } catch (error) {
+                    ErrorHandler.handleError(
+                        error,
+                        ErrorHandler.errorTypes.FILE_ERROR,
+                        'Failed to load file'
+                    );
+                }
+            });
+        }
+    },
+
+    // Registers change event for the motion dropdown list to update the current motion and layer table.
+    registerDropdownEvents() {
+        const motionList = document.getElementById('motion-list');
+        motionList.addEventListener('click', (e) => {
+            const listItem = e.target.closest('li[data-motion]');
+            if (!listItem) return;
+            
+            const selectedMotion = listItem.dataset.motion;
+            
+            // Update motion name display
+            const motionNameSpan = document.getElementById('selected-motion-name');
+            if (motionNameSpan) {
+                motionNameSpan.textContent = `(${selectedMotion})`;
+            }
+            
+            // Remove all selected-motion classes
+            document.querySelectorAll('#motion-list li').forEach(item => {
+                item.classList.remove('selected-motion');
+                if (!['red', 'blue', 'green'].includes(item.style.backgroundColor)) {
+                     item.style.backgroundColor = '';
+                     item.style.color = '';
+                }
+            });
+            
+            // Set the new selected item
+            listItem.classList.add('selected-motion');
+            if (!['red', 'blue', 'green'].includes(listItem.style.backgroundColor)) {
+                listItem.style.backgroundColor = '#4a4948';
+                listItem.style.color = 'white';
+            }
+            
+            StateManager.setState('currentMotion', selectedMotion);
+            motionController.updateTable(selectedMotion);
+        });
+    },
+
+    // Updates the currently selected cell in the CSV table and the selectedCsvValue in the state.
+    updateSelection(targetCell) {
+        const previousSelected = document.querySelector('#csvTable td.selected');
+        if (previousSelected) {
+            previousSelected.classList.remove('selected');
+        }
+        targetCell.classList.add('selected');
+        const input = targetCell.querySelector('input');
+        StateManager.setState('selectedCsvValue', input ? input.value : targetCell.textContent);
+    },
+
+    // Clears the selected cell class and resets the selectedCsvValue in the state.
+    clearSelection() {
+        const selectedCell = document.querySelector('#csvTable td.selected');
+        if (selectedCell) {
+            selectedCell.classList.remove('selected');
+            StateManager.setState('selectedCsvValue', null);
+        }
+    },
+
+    // A utility function to debounce function calls.
+    debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    },
+
+    // A utility function to throttle function calls.
+    throttle(func, limit) {
+        let inThrottle;
+        return function executedFunction(...args) {
+            if (!inThrottle) {
+                func(...args);
+                inThrottle = true;
+                setTimeout(() => inThrottle = false, limit);
+            }
+        };
+    }
+};
+</script>
+
+<script>
+const csvOperations = {
+    // Initializes the file input listener for CSV/XML files.
+    init() {
+        const csvFileInput = document.getElementById('csvFileInput');
+        csvFileInput.addEventListener('change', this.handleFileSelect.bind(this));
+    },
+
+    // Handles the file selection event and directs the file to the correct processing function.
+    handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        // Check file extension
+        const fileExtension = file.name.toLowerCase().split('.').pop();
+        
+        if (fileExtension === 'csv') {
+            this.handleCsvFile(file);
+        } else if (fileExtension === 'xml') {
+            this.handleXmlFile(file);
+        } else {
+            ErrorHandler.handleError(
+                new Error('Invalid file type'),
+                ErrorHandler.errorTypes.FILE_ERROR,
+                'Please select a CSV or XML file'
+            );
+        }
+    },
+
+    // Reads a CSV file and converts its contents into an HTML table structure.
+    handleCsvFile(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const text = e.target.result;
+                const tableHtml = this.csvToTable(text);
+                const csvTable = document.getElementById('csvTable');
+                csvTable.innerHTML = '';
+                csvTable.appendChild(tableHtml);
+                
+                // Initialize Column Hider and Resizer
+                ColumnHider.init(csvTable); 
+                ColumnResizer.init(csvTable); 
+
+            } catch (error) {
+                ErrorHandler.handleError(
+                    error,
+                    ErrorHandler.errorTypes.CSV_ERROR,
+                    'Failed to process CSV file'
+                );
+            }
+        };
+        reader.onerror = this.handleFileError;
+        reader.readAsText(file);
+    },
+
+    // Reads an XML file, analyzes its structure, and converts the data into an HTML table structure.
+    handleXmlFile(file) {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(e.target.result, "application/xml");
+
+                const analysis = this.analyzeXmlStructure(xmlDoc);
+                const { mostRepeatingTag, commonFields } = analysis;
+
+                if (!mostRepeatingTag) {
+                    throw new Error('No repeating elements found in XML');
+                }
+
+                const repeatingElements = xmlDoc.getElementsByTagName(mostRepeatingTag);
+                if (!repeatingElements.length) {
+                    throw new Error(`No ${mostRepeatingTag} elements found in XML`);
+                }
+
+                const tableHtml = this.xmlToTable(repeatingElements, commonFields);
+                const csvTable = document.getElementById('csvTable');
+                csvTable.innerHTML = '';
+                csvTable.appendChild(tableHtml);
+
+                ColumnHider.init(csvTable); 
+                ColumnResizer.init(csvTable);                
+
+                console.log('XML Analysis:', {
+                    mostRepeatingTag,
+                    elementCount: repeatingElements.length,
+                    commonFields: Array.from(commonFields)
+                });
+            } catch (error) {
+                ErrorHandler.handleError(
+                    error,
+                    ErrorHandler.errorTypes.XML_ERROR,
+                    'Failed to process XML file'
+                );
+            }
+        };
+        reader.onerror = this.handleFileError;
+        reader.readAsText(file);
+    },
+
+    // Analyzes the XML document to find the most frequently repeating element and its common child fields for table creation.
+    analyzeXmlStructure(xmlDoc) {
+        const tagCounts = new Map();
+        const fieldsByTag = new Map();
+
+        const processNode = (node) => {
+            if (node.nodeType === 1) { 
+                const tagName = node.tagName;
+                tagCounts.set(tagName, (tagCounts.get(tagName) || 0) + 1);
+
+                const fields = new Set();
+                Array.from(node.children).forEach(child => {
+                    if (child.children.length === 0 && child.textContent.trim()) {
+                        fields.add(child.tagName);
+                    }
+                });
+
+                if (fields.size > 0) {
+                    fieldsByTag.set(tagName, fields);
+                }
+
+                Array.from(node.children).forEach(processNode);
+            }
+        };
+
+        processNode(xmlDoc.documentElement);
+
+        let mostRepeatingTag = null;
+        let maxCount = 0;
+        tagCounts.forEach((count, tag) => {
+            if (count > maxCount && fieldsByTag.has(tag)) {
+                maxCount = count;
+                mostRepeatingTag = tag;
+            }
+        });
+
+        return {
+            mostRepeatingTag,
+            commonFields: fieldsByTag.get(mostRepeatingTag) || new Set()
+        };
+    },
+
+    // Converts an array of XML elements and their fields into a structured HTML table fragment.
+    xmlToTable(elements, commonFields) {
+        PerformanceMonitor.start('xmlParsing');
+        
+        const fragment = document.createDocumentFragment();
+        const table = document.createElement('table');
+
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        
+        Array.from(commonFields).forEach((field, index) => {
+            const th = document.createElement('th');
+            
+            // Adjusted header structure
+        th.innerHTML = `
+                <div class="header-content" style="display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="column-toggle" data-col-index="${index}" checked>
+                    <span class="header-text" title="${field}" style="cursor: default;">${field}</span>
+                </div>
+                <div class="column-resizer"></div> `;
+            th.style.textAlign = 'left';
+            th.style.position = 'relative'; // To position the handle
+            th.setAttribute('data-col-index', index); 
+            
+            headerRow.appendChild(th);
+                });
+        
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+        Array.from(elements).forEach(element => {
+            const tr = document.createElement('tr');
+            
+            Array.from(commonFields).forEach((field, index) => {
+                const td = document.createElement('td');
+                td.setAttribute('data-col-index', index); 
+
+                const fieldElement = element.querySelector(field);
+                const value = fieldElement ? fieldElement.textContent.trim() : '';
+                
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = value;
+                
+                // Standard background color (#4a4948)
+                input.style.cssText = `
+                    width: 100%;
+                    height: 100%;
+                    border: none;
+                    background: #4a4948; /* Solid dark grey */
+                    outline: none;
+                    color: white;
+                    font: inherit;
+                    text-align: left;
+                    padding: 8px;
+                    box-sizing: border-box;
+                    direction: ltr;
+                `;
+                
+                td.appendChild(input);
+                td.style.padding = '0';
+                td.style.position = 'relative';
+                td.style.background = 'transparent';
+                
+                input.addEventListener('input', (e) => {
+                    const selectedCell = document.querySelector('#csvTable td.selected');
+                    if (selectedCell === td) {
+                        StateManager.setState('selectedCsvValue', input.value);
+                    }
+                });
+                
+                input.addEventListener('focus', (e) => {
+                    const td = e.target.closest('td');
+                    if (td) {
+                        const previousSelected = document.querySelector('#csvTable td.selected');
+                        if (previousSelected) {
+                            previousSelected.classList.remove('selected');
+                        }
+                        
+                        td.classList.add('selected');
+                        StateManager.setState('selectedCsvValue', input.value);
+                    }
+                });
+                
+                tr.appendChild(td);
+            });
+            
+            tbody.appendChild(tr);
+        });
+
+        table.appendChild(tbody);
+        fragment.appendChild(table);
+        
+        PerformanceMonitor.end('xmlParsing');
+        return fragment;
+    },
+
+    // Converts CSV text content into an HTML table fragment.
+    csvToTable(csv) {
+        PerformanceMonitor.start('csvParsing');
+        
+        const fragment = document.createDocumentFragment();
+        const table = document.createElement('table');
+        const rows = csv.split(/\r?\n/); 
+
+        const separator = rows[0].includes(';') ? ';' : ',';
+        const splitRegex = new RegExp(`${separator}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        
+        rows[0].split(splitRegex).forEach((header, index) => {
+            const th = document.createElement('th');
+            const headerText = header.trim().replace(/^"|"$/g, '').replace(/""/g, '"');
+
+            // Adjusted header structure
+        th.innerHTML = `
+                <div class="header-content" style="display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" class="column-toggle" data-col-index="${index}" checked>
+                    <span class="header-text" title="${headerText}" style="cursor: default;">${headerText}</span>
+                </div>
+                <div class="column-resizer"></div> `;
+            th.style.textAlign = 'left';
+            th.style.position = 'relative'; // To position the handle
+            th.setAttribute('data-col-index', index); 
+
+            headerRow.appendChild(th);
+        
+        });
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+        
+        const tbody = document.createElement('tbody');
+        for(let i = 1; i < rows.length; i++) {
+            if (rows[i].trim()) {
+                const tr = document.createElement('tr');
+                
+                rows[i].split(splitRegex).forEach((cell, index) => {
+                    const td = document.createElement('td');
+                    td.setAttribute('data-col-index', index); 
+                    
+                    let cleanValue = cell.trim();
+                    if (cleanValue.startsWith('"') && cleanValue.endsWith('"')) {
+                        cleanValue = cleanValue.slice(1, -1).replace(/""/g, '"');
+                    }
+
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = cleanValue; 
+                    
+                    // Solid background color (#4a4948)
+                    input.style.cssText = `
+                        width: 100%;
+                        height: 100%;
+                        border: none;
+                        background: #4a4948; /* Solid dark grey */
+                        outline: none;
+                        color: white;
+                        font: inherit;
+                        text-align: left;
+                        padding: 8px;
+                        box-sizing: border-box;
+                        direction: ltr;
+                    `;
+                    
+                    td.appendChild(input);
+                    td.style.padding = '0';
+                    td.style.position = 'relative';
+                    td.style.background = 'transparent';
+                    
+                    input.addEventListener('input', (e) => {
+                        const selectedCell = document.querySelector('#csvTable td.selected');
+                        if (selectedCell === td) {
+                            StateManager.setState('selectedCsvValue', input.value);
+                        }
+                    });
+                    
+                    input.addEventListener('focus', (e) => {
+                        const td = e.target.closest('td');
+                        if (td) {
+                            const previousSelected = document.querySelector('#csvTable td.selected');
+                            if (previousSelected) {
+                                previousSelected.classList.remove('selected');
+                            }
+                            
+                            td.classList.add('selected');
+                            StateManager.setState('selectedCsvValue', input.value);
+                        }
+                    });
+                    
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            }
+        }
+        table.appendChild(tbody);
+        fragment.appendChild(table);
+        
+        PerformanceMonitor.end('csvParsing');
+        return fragment;
+    },
+
+
+    // General error handler for file reading operations.
+    handleFileError(error) {
+        ErrorHandler.handleError(
+            error,
+            ErrorHandler.errorTypes.FILE_ERROR,
+            'Failed to read file'
+        );
+    }
+};
+</script>
+
+<script>
+const DOMCache = {
+    elements: new Map(),
+    
+    // Retrieves a DOM element by selector, caching it for future use.
+    get(selector) {
+        if (!this.elements.has(selector)) {
+            this.elements.set(selector, document.querySelector(selector));
+        }
+        return this.elements.get(selector);
+    },
+
+    // Retrieves multiple DOM elements by selector, caching the NodeList for future use.
+    getAll(selector) {
+        if (!this.elements.has(selector)) {
+            this.elements.set(selector, document.querySelectorAll(selector));
+        }
+        return this.elements.get(selector);
+    },
+
+    // Clears the entire element cache.
+    clear() {
+        this.elements.clear();
+    }
+};
+</script>
+
+<script>
+const PerformanceMonitor = {
+    // Initializes the PerformanceObserver to monitor and log performance measures.
+    init() {
+        if ('PerformanceObserver' in window) {
+            const observer = new PerformanceObserver((list) => {
+                list.getEntries().forEach((entry) => {
+                    console.log(`Performance: ${entry.name}: ${entry.duration}`);
+                });
+            });
+            observer.observe({ entryTypes: ['measure'] });
+        }
+    },
+
+    // Records a starting performance mark.
+    start(label) {
+        performance.mark(`${label}-start`);
+    },
+
+    // Records an ending performance mark and measures the duration between start and end marks.
+    end(label) {
+        performance.mark(`${label}-end`);
+        performance.measure(label, `${label}-start`, `${label}-end`);
+    }
+};
+</script>
+
+<script>
+   const utils = {
+       // Sends an asynchronous HTTP POST request with JSON data to the server.
+       sendAjaxRequest(data) {
+           return $.ajax({
+               url: "/",
+               type: "POST",
+               data: JSON.stringify(data),
+               dataType: 'json',
+               contentType: 'application/json; charset=utf-8'
+           }).then(resp => {
+               console.log('Send To CW:', JSON.stringify(data));
+               return resp;
+           });
+       },
+
+       // Retrieves the currently selected motion and channel values from the UI.
+        getSelectedValues() {
+           const selectedMotionElement = document.querySelector('#motion-list li.selected-motion');
+           const motionValue = selectedMotionElement ? selectedMotionElement.dataset.motion : null;
+           
+           return {
+               motion: motionValue,
+               channel: document.querySelector('input[name="channel"]:checked').value
+           };
+       },
+
+       // Creates a standard command object for motion control actions (play, stop, finish).
+       createMotionCommand(action, motion, channel) {
+           return {
+               action: `${action}_motions`,
+               motions: [motion],
+               channel
+           };
+       }
+   };
+
+   const motionController = {
+       // Initializes the application by fetching the list of motions and layers from the server.
+       async initialize() {
+           try {
+               const response = await utils.sendAjaxRequest([
+                   { action: "list_motions" },
+                   { action: "list_layers" }
+               ]);
+
+               if (response[0]?.motions) {
+                   this.populateDropdown(response[0].motions);
+               }
+
+               if (response[1]?.layers) {
+                   StateManager.setState('layers', []);
+                   response[1].layers.forEach(layer => {
+                       const motionAndTextLayers = this.findMotionAndTextLayers(layer);
+                       StateManager.state.layers.push(...motionAndTextLayers);
+                   });
+               }
+
+               this.initializeFirstMotion();
+           } catch (error) {
+               console.error('Initialization error:', error);
+           }
+       },
+
+       // Sets the first motion in the dropdown as the current motion and updates the layer table.
+        initializeFirstMotion() {
+           const motionList = document.getElementById('motion-list');
+           const firstItem = motionList?.querySelector('li[data-motion]');
+           
+           if (firstItem) {
+               const firstMotionName = firstItem.dataset.motion;
+               firstItem.classList.add('selected-motion');
+               firstItem.style.backgroundColor = '#4a4948';
+               
+               // Write first motion name to span
+               const motionNameSpan = document.getElementById('selected-motion-name');
+               if (motionNameSpan) {
+                   motionNameSpan.textContent = `(${firstMotionName})`;
+               }
+               
+               StateManager.setState('currentMotion', firstMotionName);
+               this.updateTable(firstMotionName);
+           }
+       },
+
+       // Populates the motion dropdown list with names retrieved from the server, filtering out hidden ones (starting with '_').
+       populateDropdown(motions) {
+           const motionList = document.getElementById('motion-list');
+           const options = motions
+               .filter(motion => !motion.startsWith('_'))
+               .map(motion => `<li 
+                                    data-motion="${motion}" 
+                                    style="padding: 5px; margin-bottom: 2px; cursor: pointer; border-radius: 3px;"
+                                >${motion}</li>`)
+               .join('');
+           
+           motionList.innerHTML = options;
+       },
+
+       // Recursively traverses the layer structure to identify motions and their associated text layers, filtering out hidden ones.
+       findMotionAndTextLayers(obj, result = []) {
+           if (obj.name.startsWith('_')) return result;
+
+           if (obj.type === 'Motion') {
+               result.push({ name: obj.name, textLayers: [] });
+           } else if (obj.type === 'Text' && result.length > 0) {
+               result[result.length - 1].textLayers.push({
+                   name: obj.name,
+                   path: obj.path,
+                   value: ""
+               });
+           }
+
+           if (obj.children?.length > 0) {
+               obj.children.forEach(child => this.findMotionAndTextLayers(child, result));
+           }
+
+           return result;
+       },
+
+       // Updates the background color of the selected motion in the dropdown list based on its playback status and channel.
+       updateDropdownBackground(action, motion, channel) {
+           const listItems = Array.from(document.querySelectorAll('#motion-list li'));
+
+           listItems.forEach(item => {
+               if (action === 'clear') {
+                   // Clear all backgrounds to default
+                   item.style.backgroundColor = '';
+                   item.style.color = '';
+                   // Keep color for selected motion
+                   if (item.classList.contains('selected-motion')) {
+                       item.style.backgroundColor = '#4a4948';
+                       item.style.color = 'white';
+                   }
+               } else if (item.dataset.motion === motion) {
+                   // Set background color based on action and channel
+                   if (action === 'play') {
+                       if (channel === 'preview') {
+                           item.style.backgroundColor = 'green';
+                           item.style.color = 'white';
+                       } else if (channel === 'live1') {
+                           item.style.backgroundColor = 'red';
+                           item.style.color = 'white';
+                       } else if (channel === 'live2') {
+                           item.style.backgroundColor = 'blue';
+                           item.style.color = 'white';
+                       }
+                   } else if (action === 'stop') {
+                       // Only remove play color on stop, keep selected color
+                       item.style.backgroundColor = item.classList.contains('selected-motion') ? '#4a4948' : '';
+                       item.style.color = item.classList.contains('selected-motion') ? 'white' : '';
+                   }
+               }
+           });
+       },
+
+       // Executes the 'play' command for the current motion, sending updated text layer values first.
+    async play() {
+           const { motion, channel } = utils.getSelectedValues();
+           const commands = [];
+           
+           try { // Error handling block
+               const tableData = this.getTextLayerCommands();
+               if (tableData.length > 0) {
+                   commands.push(...tableData);
+               }
+           } catch (error) {
+               if (error.message === "SelectionMissingForField") {
+                   // If selection error, exit without sending AJAX request
+                   return; 
+               }
+               throw error; 
+           }
+           
+           commands.push(utils.createMotionCommand('play', motion, channel));
+           await utils.sendAjaxRequest(commands);
+
+           // Update dropdown background for play based on channel
+           this.updateDropdownBackground('play', motion, channel);
+       },
+
+       // Executes the 'stop' command for the current motion on both 'preview' and the selected channel.
+       async stop() {
+           const { motion, channel } = utils.getSelectedValues();
+           await utils.sendAjaxRequest([
+               utils.createMotionCommand('stop', motion, 'preview'),
+               utils.createMotionCommand('stop', motion, channel)
+           ]);
+
+           // Update dropdown background for stop
+           this.updateDropdownBackground('stop', motion);
+       },
+
+       // Executes the 'finish' command for the current motion.
+       async finish() {
+           const { motion, channel } = utils.getSelectedValues();
+           await utils.sendAjaxRequest(
+               utils.createMotionCommand('finish', motion, channel)
+           );
+
+           // Update dropdown background for stop
+           this.updateDropdownBackground('stop', motion);
+       },
+
+       // Executes the 'update' command to send only the latest text layer values without playing the motion.
+        async update() {
+           const { channel } = utils.getSelectedValues();
+           let commands;
+
+           try { // Error handling block
+               commands = this.getTextLayerCommands(channel);
+           } catch (error) {
+               if (error.message === "SelectionMissingForField") {
+                   return; 
+               }
+               throw error; 
+           }
+
+           if (commands.length > 0) {
+               await utils.sendAjaxRequest(commands);
+           }
+       },
+
+       // Triggers the save operation to download the current layer state as an XML file.
+       async save() {
+           const { motion } = utils.getSelectedValues();
+           xmlOperations.saveToXML(StateManager.getState('layers'), motion);
+       },
+
+       // Handles the file load event, loading layers from the selected XML file and updating the state and UI.
+       async load(event) {
+           try {
+               const file = event.target.files[0];
+               if (!file) {
+                   throw new Error('No file selected');
+               }
+
+               const newLayers = await xmlOperations.loadFromXML(file);
+               StateManager.setState('layers', newLayers);
+               
+               const motionList = document.getElementById('motion-list');
+               
+               if (StateManager.getState('layers').length && motionList) {
+                   const firstItem = motionList.querySelector('li[data-motion]');
+                   
+                   if (firstItem) {
+                       const firstMotionName = firstItem.dataset.motion;
+                       
+                       // Clear previous selection
+                       document.querySelectorAll('#motion-list li').forEach(item => {
+                           item.classList.remove('selected-motion');
+                           // Keep colors for Play/Live states
+                           if (!['red', 'blue', 'green'].includes(item.style.backgroundColor)) {
+                                item.style.backgroundColor = '';
+                                item.style.color = '';
+                           }
+                       });
+                       
+                       // Set new selection
+                       firstItem.classList.add('selected-motion');
+                       firstItem.style.backgroundColor = '#4a4948';
+                       firstItem.style.color = 'white';
+                       
+                       StateManager.setState('currentMotion', firstMotionName);
+                       this.updateTable(firstMotionName);
+                   } else {
+                        throw new Error('Loaded XML, but motion list is empty.');
+                   }
+                   
+               } else {
+                   throw new Error('No valid motions found in XML file.');
+               }
+           } catch (error) {
+               throw error; 
+           }
+       },
+
+       // Executes the 'stop' command for all motions in the dropdown.
+       async clear() {
+           // HATA BURADAYDI: 'drop' yerine 'motion-list' kullanılmalı
+           const motionList = document.getElementById('motion-list');
+           const listItems = Array.from(motionList.querySelectorAll('li[data-motion]'));
+           const { channel } = utils.getSelectedValues();
+
+           try {
+               // Create stop commands for all motions
+               const stopCommands = listItems.map(li => 
+                   utils.createMotionCommand('stop', li.dataset.motion, channel)
+               );
+
+               // Send all stop commands
+               if (stopCommands.length > 0) {
+                   await utils.sendAjaxRequest(stopCommands);
+               }
+               
+               console.log('All motions stopped successfully');
+               
+               // UI Renklerini temizle
+               listItems.forEach(item => {
+                   this.updateDropdownBackground('clear', item.dataset.motion);
+               });
+               
+           } catch (error) {
+               ErrorHandler.handleError(
+                   error,
+                   ErrorHandler.errorTypes.STATE_ERROR,
+                   'Failed to stop all motions'
+               );
+           }
+       },
+
+       // Generates text layer update commands by reading values from the layer table, including handling 'fieldN' and 'fieldN+M' expressions using the CSV table selection.
+       getTextLayerCommands(channel) {
+            const { motion } = utils.getSelectedValues();
+            const targetLayer = StateManager.getState('layers').find(layer => layer.name === motion);
+            if (!targetLayer) return [];
+
+            const inputs = Array.from($('#layerTable tbody input[type="text"]'));
+
+            const hasFieldUsage = inputs.some(input => /^field\d+(\+\d+)?$/i.test(input.value));
+            const selectedCell = document.querySelector('#csvTable td.selected');
+
+            if (hasFieldUsage && !selectedCell) {
+                ErrorHandler.showErrorToUser("Please select a row from the table first. A selection is required for the 'fieldN+M' expression.");
+                throw new Error("SelectionMissingForField");
+            }
+
+            return inputs
+                .map(input => {
+                    const pathInfo = input.getAttribute('data-path');
+                    let value = input.value || "";
+
+                    const fieldMatch = value.match(/^field(\d+)(?:\+(\d+))?$/i);
+                    if (fieldMatch && selectedCell) {
+                        const fieldNumber = parseInt(fieldMatch[1]) - 1;
+                        const rowOffset = fieldMatch[2] ? parseInt(fieldMatch[2]) : 0;
+
+                        const selectedRow = selectedCell.parentElement;
+                        let targetRow = selectedRow;
+
+                        for (let i = 0; i < rowOffset && targetRow.nextElementSibling; i++) {
+                            targetRow = targetRow.nextElementSibling;
+                        }
+
+                        if (targetRow) {
+                            const targetCell = targetRow.querySelector(`td[data-col-index="${fieldNumber}"]`);
+
+                            if (targetCell) {
+                                const cellInput = targetCell.querySelector('input');
+                                value = cellInput ? cellInput.value : targetCell.textContent.trim();
+                            }
+                        }
+                    }
+
+                    if (!pathInfo) return null;
+
+                    const targetTextLayer = targetLayer.textLayers.find(tl => tl.path === pathInfo);
+                    if (targetTextLayer) {
+                        return {
+                            action: "set_text",
+                            layer: pathInfo,
+                            value,
+                            channel
+                        };
+                    }
+                    return null;
+                })
+                .filter(Boolean);
+        },
+
+       // Generates and updates the HTML layer table for the currently selected motion, including dynamic column width sizing.
+       updateTable(selectedMotion) {
+           if (!selectedMotion) {
+               $('#layerTable').hide();
+               return;
+           }
+
+           const currentLayer = StateManager.getState('layers').find(layer => layer.name === selectedMotion);
+           if (!currentLayer) return;
+
+           const textLayers = currentLayer.textLayers.filter(textLayer => !textLayer.name.startsWith('_'));
+           
+           // Find the longest layer name length
+           const longestName = textLayers.reduce((max, layer) => {
+               return layer.name.length > max ? layer.name.length : max;
+           }, 0);
+
+           // Create temporary span to measure text width
+           const tempSpan = document.createElement('span');
+           tempSpan.style.visibility = 'hidden';
+           tempSpan.style.position = 'absolute';
+           tempSpan.style.whiteSpace = 'nowrap';
+           tempSpan.style.font = window.getComputedStyle(document.querySelector('#layerTable')).font;
+           document.body.appendChild(tempSpan);
+
+           // Get the width of the longest text
+           tempSpan.textContent = 'X'.repeat(longestName);
+           const maxWidth = tempSpan.offsetWidth + 40; // Add padding
+
+           // Remove temporary span
+           document.body.removeChild(tempSpan);
+
+           // Update the CSS for the first column
+           const style = document.createElement('style');
+           style.textContent = `
+               #layerTable th:first-child,
+               #layerTable td:first-child {
+                   width: ${maxWidth}px;
+                   min-width: ${maxWidth}px;
+                   max-width: ${maxWidth}px;
+                   white-space: nowrap;
+                   overflow: hidden;
+                   text-overflow: ellipsis;
+               }
+           `;
+           
+           // Remove any previous dynamic styles
+           const oldStyle = document.querySelector('#dynamic-layer-table-style');
+           if (oldStyle) {
+               oldStyle.remove();
+           }
+           
+           style.id = 'dynamic-layer-table-style';
+           document.head.appendChild(style);
+
+           // Create table rows
+           const rows = textLayers
+               .map(textLayer => `
+                   <tr>
+                       <td title="${textLayer.name}">${textLayer.name}</td>
+                       <td>
+                           <input type="text" 
+                                  value="${textLayer.value || ''}" 
+                                  data-path="${textLayer.path}"
+                                  >
+                       </td>
+                   </tr>
+               `).join('');
+
+           $('#layerTable tbody').html(rows);
+           $('#layerTable').show();
+       },
+
+       // Synchronizes the layer data in the StateManager with the current values entered in the layer table inputs.
+       updateGlobalLayerFromTable(selectedValue) {
+           if (!selectedValue) return;
+
+           const layer = StateManager.getState('layers').find(l => l.name === selectedValue);
+           if (!layer) return;
+
+           const inputs = Array.from($('#layerTable tbody tr')).map(row => ({
+               path: $(row).find('input').attr('data-path'),
+               value: $(row).find('input').val() || ""
+           }));
+
+           layer.textLayers.forEach(textLayer => {
+               const input = inputs.find(i => i.path === textLayer.path);
+               if (input) textLayer.value = input.value;
+           });
+       }
+   };
+
+   // Main entry point: Initializes event handlers, performance monitor, CSV operations, and the motion controller.
+   document.addEventListener('DOMContentLoaded', () => {
+       EventManager.init();
+       PerformanceMonitor.init();
+       csvOperations.init();
+       motionController.initialize();
+       DOMCache.clear();
+       PanelResizer.init(); 
+   });
+
+$(document).ready(function() {
+    function checkFooterVisibility() {
+        var $footer = $('#footer');
+        var $ustbolge = $('#ustbolge');
+
+        if ($footer.length === 0 || $ustbolge.length === 0) return;
+
+        var footerRect = $footer[0].getBoundingClientRect();
+        var ustbolgeRect = $ustbolge[0].getBoundingClientRect();
+
+        var isOverlapping = ustbolgeRect.bottom > footerRect.top;
+
+        if (isOverlapping) {
+            $footer.css({
+                'opacity': '0',
+                'pointer-events': 'none',
+                'visibility': 'hidden'
+            });
+        } else {
+            $footer.css({
+                'opacity': '1',
+                'pointer-events': 'auto',
+                'visibility': 'visible'
+            });
+        }
+    }
+
+    $(window).on('scroll resize', checkFooterVisibility);
+    $('.container').on('scroll', checkFooterVisibility);
+
+    var observer = new MutationObserver(function(mutations) {
+        checkFooterVisibility();
+    });
+
+    var target = document.getElementById('ustbolge');
+    if (target) {
+        observer.observe(target, { 
+            childList: true, 
+            subtree: true,   
+            attributes: true 
+        });
+    }
+
+    checkFooterVisibility();
+});
+
+</script>
+
+<body>
+
+    <div id="main">
+        <h2>CharacterWorks Remote Text Controller</h2>
+
+
+        <div id="main-container" style="display: flex; height: 100vh;">
+        
+        <div id="left-panel" style="width: 200px; padding: 10px; background-color: #383838; overflow-y: auto; flex-shrink: 0;">
+            <h2>Motions</h2>
+            <ul id="motion-list" style="list-style: none; padding: 0;"></ul>
+        </div>
+        
+        <div id="panel-resizer"></div>
+
+        <div id="right-panel" style="flex: 1; padding: 10px; overflow-y: auto;">
+
+            <div id="grid_view" class="button-container">
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <button class="button" data-action="play">Play</button>
+                    <button class="button" data-action="finish">Finish</button>
+                    <button class="button" data-action="stop">Stop</button>
+                    <button class="button" data-action="update">Update</button>
+                    <button class="button" data-action="clear">Clear</button>
+                    <button class="save-button" data-action="save">Save</button>
+                    <label class="save-button" style="cursor: pointer;" data-action="load">
+                        Load
+                        <input type="file" accept=".xml" style="display: none;">
+                    </label>
+                    
+                    <div id="channelOptions" style="margin-top: 0; margin-left: 10px;">
+                        <label>
+                            <input type="radio" name="channel" value="live1" checked> Live1
+                        </label><br>
+                        <label>
+                            <input type="radio" name="channel" value="live2"> Live2
+                        </label><br>
+                        <label>
+                            <input type="radio" name="channel" value="preview"> Preview
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="grid-spacer"></div>
+
+            <table id="layerTable">
+                <thead>
+                    <tr>
+                        <th>Layer Name</th>
+                        <th>Editable Field <span id="selected-motion-name">(-)</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+
+            <section id="ustbolge">
+                <input type="file" id="csvFileInput" accept=".csv,.xml" />
+                <div class="container" style="margin-top: 20px;">
+                    <div>
+                        <table id="csvTable"></table>
+                    </div>
+                </div>
+            </section>
+
+    <div id="footer">
+        If you put _ in front of Motion and Layer names, these layers will not be visible on the HTML screen.
+        <br>
+        <span>In the "Editable Field" column, you can type fieldN or fieldN+M (e.g., field1, field2+1). This will automatically pull text from the selected row (N is column number, M is row offset from the selected row) in the CSV/XML table. Make sure you have a cell selected in the CSV/XML table before using Play/Update.</span>
+        <br>
+        <span>Motion list colors. Red: Live1, Blue: Live2, Green: Preview playing motion.</span>
+    </div>
+
+        </div>
+    
+    </div>
+            
+
+    </div>
+
+</body>
+
+</html>
